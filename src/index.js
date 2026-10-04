@@ -23,8 +23,26 @@ import { catalogRouter } from './routes/catalog.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number.parseInt(process.env.PORT, 10) || 4000;
 
-await migrate();
-await seedIfEmpty();
+// Connect, create the schema and seed the catalogue BEFORE we start listening.
+// If the database is unreachable we log an actionable message (Render has no
+// IPv6 route, so an IPv6-only host fails with ENETUNREACH) and exit.
+try {
+  await migrate();
+  await seedIfEmpty();
+} catch (error) {
+  console.error(`\n  ✖ Could not reach the database: ${error.message}`);
+  if (error.code === 'ENETUNREACH' || error.code === 'ENOTFOUND') {
+    console.error(
+      '    The database host resolved to an IPv6 address, but Render has no IPv6\n' +
+        '    network route. In Supabase use the "Connection pooling" (Session mode)\n' +
+        '    string for DATABASE_URL - the host must be\n' +
+        '    aws-0-<region>.pooler.supabase.com, NOT db.<ref>.supabase.co.\n'
+    );
+  } else {
+    console.error('    Check DATABASE_URL and that the database accepts connections.\n');
+  }
+  process.exit(1);
+}
 
 const app = express();
 app.disable('x-powered-by');

@@ -13,10 +13,53 @@
  * `seed-data.js`, together with elegant SVG artwork referenced as
  * `/art/<slug>.svg`.
  */
+import dns from 'node:dns';
+import net from 'node:net';
 import pg from 'pg';
 import { CATEGORIES, servicesSeed, styleSeed, testimonialsSeed } from './seed-data.js';
 
 const { Pool, types } = pg;
+
+/*
+ * Render.com (and most container platforms) have NO outbound IPv6 network route.
+ * Node 17+ resolves DNS in "verbatim" order, so a database hostname that
+ * publishes an AAAA (IPv6) record can be dialled over IPv6 and fail with:
+ *
+ *   Error: connect ENETUNREACH <ipv6-address>:5432 - Local (:::0)
+ *
+ * This usually means DATABASE_URL points at Supabase's *direct* connection
+ * (db.<ref>.supabase.co), which is IPv6-only. The *Connection pooling* string
+ * on aws-0-<region>.pooler.supabase.com publishes IPv4 records and is the
+ * correct choice for Render. As a safety net we also prefer IPv4 below.
+ */
+dns.setDefaultResultOrder('ipv4first');
+
+/**
+ * `dns.lookup` that prefers IPv4 but still falls back to whatever the host
+ * actually publishes, so genuine IPv6-only hosts keep working where supported.
+ */
+function preferIpv4Lookup(hostname, options, callback) {
+  if (typeof options === 'function') {
+    callback = options;
+    options = {};
+  }
+  dns.lookup(hostname, { ...options, family: 4 }, (error, address, family) => {
+    if (error) return dns.lookup(hostname, options, callback);
+    return callback(null, address, family);
+  });
+}
+
+/**
+ * `pg` dials the server with a bare `net.Socket` and exposes no `lookup`
+ * option, so we hand it a socket that resolves the host to IPv4 first (above).
+ */
+function ipv4Socket() {
+  const socket = new net.Socket();
+  const connect = socket.connect.bind(socket);
+  socket.connect = (port, host, ...rest) =>
+    connect({ port, host, lookup: preferIpv4Lookup }, ...rest);
+  return socket;
+}
 
 // Postgres returns COUNT(*) (int8) as a string to avoid precision loss - parse
 // it back to a number so `count === 0` checks and the admin counters work.
@@ -60,12 +103,24 @@ export const usingRemoteDatabase = true;
 export const pool = new Pool({
   connectionString,
   ssl: sslFor(connectionString),
+  // Dial over IPv4 first (Render has no IPv6 route - see preferIpv4Lookup).
+  stream: ipv4Socket,
   max: Number.parseInt(process.env.PGPOOL_MAX, 10) || 5,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 15_000,
 });
 
-pool.on('error', (err) => console.error('[db] idle client error:', err.message));
+pool.on('error', (err) => {
+  console.error('[db] idle client error:', err.message);
+  if (err.code === 'ENETUNREACH' && err.syscall === 'connect') {
+    console.error(
+      '[db] The database host resolved to IPv6, but this platform has no IPv6\n' +
+        '     route (Render). Use Supabase\'s "Connection pooling" (Session mode)\n' +
+        '     string for DATABASE_URL - NOT the direct db.<ref>.supabase.co one:\n' +
+        '     postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres'
+    );
+  }
+});
 
 /* ------------------------------------------------------------ query helpers */
 
