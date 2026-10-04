@@ -15,7 +15,7 @@ import {
   requireAdmin,
   tokenFromRequest,
 } from '../middleware/adminAuth.js';
-import { removeUploadedFile, upload } from '../lib/upload.js';
+import { processUploadedFile, removeUploadedFile, upload } from '../lib/upload.js';
 import { toBooking, toStyle } from './catalog.js';
 
 export const adminRouter = Router();
@@ -74,97 +74,106 @@ adminRouter.get('/admin/styles', requireAdmin, (req, res) => {
   });
 });
 
-adminRouter.post('/admin/styles', requireAdmin, upload.single('image'), (req, res) => {
-  const body = req.body || {};
-  const name = text(body.name, 140);
-  const category = text(body.category, 80) || 'Braids & Twists';
+adminRouter.post('/admin/styles', requireAdmin, upload.single('image'), async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const name = text(body.name, 140);
+    const category = text(body.category, 80) || 'Braids & Twists';
 
-  if (name.length < 2) {
-    if (req.file) removeUploadedFile(`/uploads/${req.file.filename}`);
-    return res.status(400).json({ error: 'Give the style a name (at least 2 characters).' });
+    if (name.length < 2) {
+      return res.status(400).json({ error: 'Give the style a name (at least 2 characters).' });
+    }
+
+    const slug = uniqueSlug(name);
+
+    // Upload to Cloudinary (or local disk) if a file was provided
+    const uploadedUrl = await processUploadedFile(req.file, name);
+    const imageUrl = uploadedUrl || text(body.imageUrl, 400) || `/art/${slug}.svg`;
+
+    const nextOrder = (db.prepare('SELECT MAX(sort_order) AS max FROM styles').get().max || 0) + 1;
+
+    const result = db
+      .prepare(
+        `INSERT INTO styles (slug, name, category, description, price_from, duration_minutes, image_url, featured, active, sort_order)
+         VALUES (@slug, @name, @category, @description, @price_from, @duration_minutes, @image_url, @featured, @active, @sort_order)`
+      )
+      .run({
+        slug,
+        name,
+        category,
+        description: text(body.description, 1200),
+        price_from: num(body.priceFrom),
+        duration_minutes: num(body.durationMinutes),
+        image_url: imageUrl,
+        featured: bool(body.featured) ? 1 : 0,
+        active: body.active === undefined ? 1 : bool(body.active) ? 1 : 0,
+        sort_order: nextOrder,
+      });
+
+    const created = db.prepare('SELECT * FROM styles WHERE id = ?').get(result.lastInsertRowid);
+    return res.status(201).json({ ok: true, style: toStyle(created) });
+  } catch (err) {
+    return next(err);
   }
-
-  const slug = uniqueSlug(name);
-  const imageUrl = req.file
-    ? `/uploads/${req.file.filename}`
-    : text(body.imageUrl, 400) || `/art/${slug}.svg`;
-
-  const nextOrder = (db.prepare('SELECT MAX(sort_order) AS max FROM styles').get().max || 0) + 1;
-
-  const result = db
-    .prepare(
-      `INSERT INTO styles (slug, name, category, description, price_from, duration_minutes, image_url, featured, active, sort_order)
-       VALUES (@slug, @name, @category, @description, @price_from, @duration_minutes, @image_url, @featured, @active, @sort_order)`
-    )
-    .run({
-      slug,
-      name,
-      category,
-      description: text(body.description, 1200),
-      price_from: num(body.priceFrom),
-      duration_minutes: num(body.durationMinutes),
-      image_url: imageUrl,
-      featured: bool(body.featured) ? 1 : 0,
-      active: body.active === undefined ? 1 : bool(body.active) ? 1 : 0,
-      sort_order: nextOrder,
-    });
-
-  const created = db.prepare('SELECT * FROM styles WHERE id = ?').get(result.lastInsertRowid);
-  return res.status(201).json({ ok: true, style: toStyle(created) });
 });
 
-adminRouter.patch('/admin/styles/:id', requireAdmin, upload.single('image'), (req, res) => {
-  const id = Number.parseInt(req.params.id, 10);
-  const existing = db.prepare('SELECT * FROM styles WHERE id = ?').get(id);
-  if (!existing) {
-    if (req.file) removeUploadedFile(`/uploads/${req.file.filename}`);
-    return res.status(404).json({ error: 'That style no longer exists.' });
+adminRouter.patch('/admin/styles/:id', requireAdmin, upload.single('image'), async (req, res, next) => {
+  try {
+    const id = Number.parseInt(req.params.id, 10);
+    const existing = db.prepare('SELECT * FROM styles WHERE id = ?').get(id);
+    if (!existing) {
+      return res.status(404).json({ error: 'That style no longer exists.' });
+    }
+
+    const body = req.body || {};
+    const name = body.name === undefined ? existing.name : text(body.name, 140) || existing.name;
+    const slug = name === existing.name ? existing.slug : uniqueSlug(name, id);
+
+    let imageUrl = existing.image_url;
+    if (req.file) {
+      // Upload new image to Cloudinary (or local disk)
+      imageUrl = await processUploadedFile(req.file, name);
+      // Delete the old image
+      removeUploadedFile(existing.image_url);
+    } else if (body.imageUrl !== undefined && text(body.imageUrl, 400)) {
+      imageUrl = text(body.imageUrl, 400);
+      if (imageUrl !== existing.image_url) removeUploadedFile(existing.image_url);
+    }
+
+    db.prepare(
+      `UPDATE styles SET
+         slug = @slug,
+         name = @name,
+         category = @category,
+         description = @description,
+         price_from = @price_from,
+         duration_minutes = @duration_minutes,
+         image_url = @image_url,
+         featured = @featured,
+         active = @active,
+         updated_at = datetime('now')
+       WHERE id = @id`
+    ).run({
+      id,
+      slug,
+      name,
+      category:
+        body.category === undefined ? existing.category : text(body.category, 80) || existing.category,
+      description:
+        body.description === undefined ? existing.description : text(body.description, 1200),
+      price_from: body.priceFrom === undefined ? existing.price_from : num(body.priceFrom),
+      duration_minutes:
+        body.durationMinutes === undefined ? existing.duration_minutes : num(body.durationMinutes),
+      image_url: imageUrl,
+      featured: body.featured === undefined ? existing.featured : bool(body.featured) ? 1 : 0,
+      active: body.active === undefined ? existing.active : bool(body.active) ? 1 : 0,
+    });
+
+    const updated = db.prepare('SELECT * FROM styles WHERE id = ?').get(id);
+    return res.json({ ok: true, style: toStyle(updated) });
+  } catch (err) {
+    return next(err);
   }
-
-  const body = req.body || {};
-  const name = body.name === undefined ? existing.name : text(body.name, 140) || existing.name;
-  const slug = name === existing.name ? existing.slug : uniqueSlug(name, id);
-
-  let imageUrl = existing.image_url;
-  if (req.file) {
-    imageUrl = `/uploads/${req.file.filename}`;
-    removeUploadedFile(existing.image_url);
-  } else if (body.imageUrl !== undefined && text(body.imageUrl, 400)) {
-    imageUrl = text(body.imageUrl, 400);
-    if (imageUrl !== existing.image_url) removeUploadedFile(existing.image_url);
-  }
-
-  db.prepare(
-    `UPDATE styles SET
-       slug = @slug,
-       name = @name,
-       category = @category,
-       description = @description,
-       price_from = @price_from,
-       duration_minutes = @duration_minutes,
-       image_url = @image_url,
-       featured = @featured,
-       active = @active,
-       updated_at = datetime('now')
-     WHERE id = @id`
-  ).run({
-    id,
-    slug,
-    name,
-    category:
-      body.category === undefined ? existing.category : text(body.category, 80) || existing.category,
-    description:
-      body.description === undefined ? existing.description : text(body.description, 1200),
-    price_from: body.priceFrom === undefined ? existing.price_from : num(body.priceFrom),
-    duration_minutes:
-      body.durationMinutes === undefined ? existing.duration_minutes : num(body.durationMinutes),
-    image_url: imageUrl,
-    featured: body.featured === undefined ? existing.featured : bool(body.featured) ? 1 : 0,
-    active: body.active === undefined ? existing.active : bool(body.active) ? 1 : 0,
-  });
-
-  const updated = db.prepare('SELECT * FROM styles WHERE id = ?').get(id);
-  return res.json({ ok: true, style: toStyle(updated) });
 });
 
 adminRouter.delete('/admin/styles/:id', requireAdmin, (req, res) => {
