@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import cors from 'cors';
 import express from 'express';
-import { dbFilePath, migrate, seedIfEmpty } from './db.js';
+import { dbTarget, migrate, seedIfEmpty } from './db.js';
 import { uploadsDir } from './lib/upload.js';
 import { adminRouter } from './routes/admin.js';
 import { bookingsRouter } from './routes/bookings.js';
@@ -23,8 +23,8 @@ import { catalogRouter } from './routes/catalog.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number.parseInt(process.env.PORT, 10) || 4000;
 
-migrate();
-seedIfEmpty();
+await migrate();
+await seedIfEmpty();
 
 const app = express();
 app.disable('x-powered-by');
@@ -89,7 +89,7 @@ app.use((error, req, res, next) => {
 
 app.listen(PORT, () => {
   console.log(`\n  My Beauty Outfit Hair API listening on http://localhost:${PORT}`);
-  console.log(`  Database: ${dbFilePath}`);
+  console.log(`  Database: ${dbTarget}`);
   if (!process.env.ADMIN_PASSCODE) {
     console.warn('  ⚠  ADMIN_PASSCODE is not set - using the default from middleware/adminAuth.js.');
     console.warn('     Copy server/.env.example to server/.env and choose your own passcode.\n');

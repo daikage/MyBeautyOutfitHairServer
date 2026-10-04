@@ -62,8 +62,8 @@ adminRouter.get('/admin/session', requireAdmin, (req, res) => {
 
 /* ------------------------------------------------------------------- styles */
 
-adminRouter.get('/admin/styles', requireAdmin, (req, res) => {
-  const rows = db.prepare('SELECT * FROM styles ORDER BY sort_order ASC, name ASC').all();
+adminRouter.get('/admin/styles', requireAdmin, async (req, res) => {
+  const rows = await db.all('SELECT * FROM styles ORDER BY sort_order ASC, name ASC');
   res.json({
     styles: rows.map(toStyle),
     counts: {
@@ -84,20 +84,19 @@ adminRouter.post('/admin/styles', requireAdmin, upload.single('image'), async (r
       return res.status(400).json({ error: 'Give the style a name (at least 2 characters).' });
     }
 
-    const slug = uniqueSlug(name);
+    const slug = await uniqueSlug(name);
 
     // Upload to Cloudinary (or local disk) if a file was provided
     const uploadedUrl = await processUploadedFile(req.file, name);
     const imageUrl = uploadedUrl || text(body.imageUrl, 400) || `/art/${slug}.svg`;
 
-    const nextOrder = (db.prepare('SELECT MAX(sort_order) AS max FROM styles').get().max || 0) + 1;
+    const nextOrder = ((await db.get('SELECT MAX(sort_order) AS max FROM styles')).max || 0) + 1;
 
-    const result = db
-      .prepare(
-        `INSERT INTO styles (slug, name, category, description, price_from, duration_minutes, image_url, featured, active, sort_order)
-         VALUES (@slug, @name, @category, @description, @price_from, @duration_minutes, @image_url, @featured, @active, @sort_order)`
-      )
-      .run({
+    const created = await db.get(
+      `INSERT INTO styles (slug, name, category, description, price_from, duration_minutes, image_url, featured, active, sort_order)
+       VALUES (@slug, @name, @category, @description, @price_from, @duration_minutes, @image_url, @featured, @active, @sort_order)
+       RETURNING *`,
+      {
         slug,
         name,
         category,
@@ -108,9 +107,8 @@ adminRouter.post('/admin/styles', requireAdmin, upload.single('image'), async (r
         featured: bool(body.featured) ? 1 : 0,
         active: body.active === undefined ? 1 : bool(body.active) ? 1 : 0,
         sort_order: nextOrder,
-      });
-
-    const created = db.prepare('SELECT * FROM styles WHERE id = ?').get(result.lastInsertRowid);
+      }
+    );
     return res.status(201).json({ ok: true, style: toStyle(created) });
   } catch (err) {
     return next(err);
@@ -120,14 +118,14 @@ adminRouter.post('/admin/styles', requireAdmin, upload.single('image'), async (r
 adminRouter.patch('/admin/styles/:id', requireAdmin, upload.single('image'), async (req, res, next) => {
   try {
     const id = Number.parseInt(req.params.id, 10);
-    const existing = db.prepare('SELECT * FROM styles WHERE id = ?').get(id);
+    const existing = await db.get('SELECT * FROM styles WHERE id = ?', [id]);
     if (!existing) {
       return res.status(404).json({ error: 'That style no longer exists.' });
     }
 
     const body = req.body || {};
     const name = body.name === undefined ? existing.name : text(body.name, 140) || existing.name;
-    const slug = name === existing.name ? existing.slug : uniqueSlug(name, id);
+    const slug = name === existing.name ? existing.slug : await uniqueSlug(name, id);
 
     let imageUrl = existing.image_url;
     if (req.file) {
@@ -140,7 +138,7 @@ adminRouter.patch('/admin/styles/:id', requireAdmin, upload.single('image'), asy
       if (imageUrl !== existing.image_url) removeUploadedFile(existing.image_url);
     }
 
-    db.prepare(
+    await db.run(
       `UPDATE styles SET
          slug = @slug,
          name = @name,
@@ -151,46 +149,45 @@ adminRouter.patch('/admin/styles/:id', requireAdmin, upload.single('image'), asy
          image_url = @image_url,
          featured = @featured,
          active = @active,
-         updated_at = datetime('now')
-       WHERE id = @id`
-    ).run({
-      id,
-      slug,
-      name,
-      category:
-        body.category === undefined ? existing.category : text(body.category, 80) || existing.category,
-      description:
-        body.description === undefined ? existing.description : text(body.description, 1200),
-      price_from: body.priceFrom === undefined ? existing.price_from : num(body.priceFrom),
-      duration_minutes:
-        body.durationMinutes === undefined ? existing.duration_minutes : num(body.durationMinutes),
-      image_url: imageUrl,
-      featured: body.featured === undefined ? existing.featured : bool(body.featured) ? 1 : 0,
-      active: body.active === undefined ? existing.active : bool(body.active) ? 1 : 0,
-    });
+         updated_at = now()
+       WHERE id = @id`,
+      {
+        id,
+        slug,
+        name,
+        category:
+          body.category === undefined ? existing.category : text(body.category, 80) || existing.category,
+        description:
+          body.description === undefined ? existing.description : text(body.description, 1200),
+        price_from: body.priceFrom === undefined ? existing.price_from : num(body.priceFrom),
+        duration_minutes:
+          body.durationMinutes === undefined ? existing.duration_minutes : num(body.durationMinutes),
+        image_url: imageUrl,
+        featured: body.featured === undefined ? existing.featured : bool(body.featured) ? 1 : 0,
+        active: body.active === undefined ? existing.active : bool(body.active) ? 1 : 0,
+      }
+    );
 
-    const updated = db.prepare('SELECT * FROM styles WHERE id = ?').get(id);
+    const updated = await db.get('SELECT * FROM styles WHERE id = ?', [id]);
     return res.json({ ok: true, style: toStyle(updated) });
   } catch (err) {
     return next(err);
   }
 });
 
-adminRouter.delete('/admin/styles/:id', requireAdmin, (req, res) => {
+adminRouter.delete('/admin/styles/:id', requireAdmin, async (req, res) => {
   const id = Number.parseInt(req.params.id, 10);
-  const existing = db.prepare('SELECT * FROM styles WHERE id = ?').get(id);
+  const existing = await db.get('SELECT * FROM styles WHERE id = ?', [id]);
   if (!existing) return res.status(404).json({ error: 'That style no longer exists.' });
 
-  db.prepare('DELETE FROM styles WHERE id = ?').run(id);
+  await db.run('DELETE FROM styles WHERE id = ?', [id]);
   removeUploadedFile(existing.image_url);
   return res.json({ ok: true, id });
 });
 /* ------------------------------------------------------------------ bookings */
 
-adminRouter.get('/admin/bookings', requireAdmin, (req, res) => {
-  const rows = db
-    .prepare('SELECT * FROM bookings ORDER BY datetime(created_at) DESC, id DESC')
-    .all();
+adminRouter.get('/admin/bookings', requireAdmin, async (req, res) => {
+  const rows = await db.all('SELECT * FROM bookings ORDER BY created_at DESC, id DESC');
   res.json({
     bookings: rows.map(toBooking),
     counts: STATUSES.reduce((acc, status) => {
@@ -200,9 +197,9 @@ adminRouter.get('/admin/bookings', requireAdmin, (req, res) => {
   });
 });
 
-adminRouter.patch('/admin/bookings/:id', requireAdmin, (req, res) => {
+adminRouter.patch('/admin/bookings/:id', requireAdmin, async (req, res) => {
   const id = Number.parseInt(req.params.id, 10);
-  const existing = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
+  const existing = await db.get('SELECT * FROM bookings WHERE id = ?', [id]);
   if (!existing) return res.status(404).json({ error: 'That request no longer exists.' });
 
   const status = text(req.body?.status, 20);
@@ -210,20 +207,20 @@ adminRouter.patch('/admin/bookings/:id', requireAdmin, (req, res) => {
     return res.status(400).json({ error: `Status must be one of: ${STATUSES.join(', ')}.` });
   }
 
-  db.prepare('UPDATE bookings SET status = ? WHERE id = ?').run(status, id);
-  const updated = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
+  await db.run('UPDATE bookings SET status = ? WHERE id = ?', [status, id]);
+  const updated = await db.get('SELECT * FROM bookings WHERE id = ?', [id]);
   return res.json({ ok: true, booking: toBooking(updated) });
 });
 
-adminRouter.delete('/admin/bookings/:id', requireAdmin, (req, res) => {
+adminRouter.delete('/admin/bookings/:id', requireAdmin, async (req, res) => {
   const id = Number.parseInt(req.params.id, 10);
-  db.prepare('DELETE FROM bookings WHERE id = ?').run(id);
+  await db.run('DELETE FROM bookings WHERE id = ?', [id]);
   res.json({ ok: true, id });
 });
 
 /* ------------------------------------------------------------------- content */
 
-adminRouter.patch('/admin/content', requireAdmin, (req, res) => {
+adminRouter.patch('/admin/content', requireAdmin, async (req, res) => {
   const body = req.body || {};
   const map = {
     announcement: ['announcement', 240],
@@ -231,8 +228,8 @@ adminRouter.patch('/admin/content', requireAdmin, (req, res) => {
     heroTitle: ['hero_title', 160],
     heroSubtitle: ['hero_subtitle', 400],
   };
-  Object.entries(map).forEach(([field, [key, max]]) => {
-    if (body[field] !== undefined) setSetting(key, text(body[field], max));
-  });
+  for (const [field, [key, max]] of Object.entries(map)) {
+    if (body[field] !== undefined) await setSetting(key, text(body[field], max));
+  }
   res.json({ ok: true });
 });

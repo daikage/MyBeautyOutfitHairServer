@@ -13,7 +13,7 @@ const clean = (value, max = 800) =>
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-bookingsRouter.post('/bookings', (req, res) => {
+bookingsRouter.post('/bookings', async (req, res) => {
   const body = req.body || {};
   const name = clean(body.name, 120);
   const email = clean(body.email, 160);
@@ -32,15 +32,14 @@ bookingsRouter.post('/bookings', (req, res) => {
   }
 
   const style = Number.isFinite(styleId)
-    ? db.prepare('SELECT id, name FROM styles WHERE id = ?').get(styleId)
+    ? await db.get('SELECT id, name FROM styles WHERE id = ?', [styleId])
     : null;
 
-  const result = db
-    .prepare(
-      `INSERT INTO bookings (name, email, phone, style_id, style_name, preferred_date, preferred_time, notes)
-       VALUES (@name, @email, @phone, @style_id, @style_name, @preferred_date, @preferred_time, @notes)`
-    )
-    .run({
+  const booking = await db.get(
+    `INSERT INTO bookings (name, email, phone, style_id, style_name, preferred_date, preferred_time, notes)
+     VALUES (@name, @email, @phone, @style_id, @style_name, @preferred_date, @preferred_time, @notes)
+     RETURNING *`,
+    {
       name,
       email: email || null,
       phone: phone || null,
@@ -49,9 +48,8 @@ bookingsRouter.post('/bookings', (req, res) => {
       preferred_date: preferredDate || null,
       preferred_time: preferredTime || null,
       notes: notes || null,
-    });
-
-  const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(result.lastInsertRowid);
+    }
+  );
   return res.status(201).json({
     ok: true,
     message: 'Thank you! Your request is in - you will hear back within 24 hours.',

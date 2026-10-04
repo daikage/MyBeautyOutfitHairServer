@@ -3,11 +3,11 @@
  * Forces a refresh:        npm run seed -- --force
  */
 import 'dotenv/config';
-import { dbFilePath, migrate, seedIfEmpty } from './db.js';
+import { dbTarget, migrate, seedIfEmpty } from './db.js';
 
 const force = process.argv.includes('--force');
 
-migrate();
-seedIfEmpty({ force });
+await migrate();
+await seedIfEmpty({ force });
 
-console.log(`[seed] database ready at ${dbFilePath}${force ? ' (forced refresh)' : ''}`);
+console.log(`[seed] database ready at ${dbTarget}${force ? ' (forced refresh)' : ''}`);

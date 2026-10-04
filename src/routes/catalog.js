@@ -42,12 +42,12 @@ export function toBooking(row) {
   };
 }
 
-catalogRouter.get('/health', (req, res) => {
-  const styles = db.prepare('SELECT COUNT(*) AS n FROM styles').get().n;
+catalogRouter.get('/health', async (req, res) => {
+  const styles = (await db.get('SELECT COUNT(*) AS n FROM styles')).n;
   res.json({ ok: true, styles, time: new Date().toISOString() });
 });
 
-catalogRouter.get('/styles', (req, res) => {
+catalogRouter.get('/styles', async (req, res) => {
   const { category, featured, q, limit } = req.query;
   const where = ['active = 1'];
   const params = {};
@@ -71,28 +71,26 @@ catalogRouter.get('/styles', (req, res) => {
     params.limit = Math.min(max, 300);
   }
 
-  const rows = db.prepare(sql).all(params);
+  const rows = await db.all(sql, params);
   res.json({ styles: rows.map(toStyle), total: rows.length });
 });
 
-catalogRouter.get('/styles/:idOrSlug', (req, res) => {
+catalogRouter.get('/styles/:idOrSlug', async (req, res) => {
   const { idOrSlug } = req.params;
   const row = /^\d+$/.test(idOrSlug)
-    ? db.prepare('SELECT * FROM styles WHERE id = ?').get(Number(idOrSlug))
-    : db.prepare('SELECT * FROM styles WHERE slug = ?').get(idOrSlug);
+    ? await db.get('SELECT * FROM styles WHERE id = ?', [Number(idOrSlug)])
+    : await db.get('SELECT * FROM styles WHERE slug = ?', [idOrSlug]);
 
   if (!row) return res.status(404).json({ error: 'That style could not be found.' });
   return res.json({ style: toStyle(row) });
 });
 
-catalogRouter.get('/categories', (req, res) => {
-  res.json({ categories: categorySummary() });
+catalogRouter.get('/categories', async (req, res) => {
+  res.json({ categories: await categorySummary() });
 });
 
-catalogRouter.get('/services', (req, res) => {
-  const rows = db
-    .prepare('SELECT * FROM services ORDER BY sort_order ASC, title ASC')
-    .all();
+catalogRouter.get('/services', async (req, res) => {
+  const rows = await db.all('SELECT * FROM services ORDER BY sort_order ASC, title ASC');
   res.json({
     services: rows.map((row) => ({
       id: row.id,
@@ -104,8 +102,8 @@ catalogRouter.get('/services', (req, res) => {
   });
 });
 
-catalogRouter.get('/testimonials', (req, res) => {
-  const rows = db.prepare('SELECT * FROM testimonials ORDER BY id ASC').all();
+catalogRouter.get('/testimonials', async (req, res) => {
+  const rows = await db.all('SELECT * FROM testimonials ORDER BY id ASC');
   res.json({
     testimonials: rows.map((row) => ({
       id: row.id,
@@ -118,8 +116,8 @@ catalogRouter.get('/testimonials', (req, res) => {
 });
 
 /** Editable site text (hero copy + announcement bar), managed from /admin. */
-catalogRouter.get('/content', (req, res) => {
-  const settings = getSettings();
+catalogRouter.get('/content', async (req, res) => {
+  const settings = await getSettings();
   res.json({
     content: {
       announcement: settings.announcement || '',
