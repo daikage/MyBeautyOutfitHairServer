@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import cors from 'cors';
 import express from 'express';
 import { dbTarget, migrate, seedIfEmpty } from './db.js';
-import { uploadsDir } from './lib/upload.js';
+import { uploadsDir, usingCloudinary } from './lib/upload.js';
 import { adminRouter } from './routes/admin.js';
 import { bookingsRouter } from './routes/bookings.js';
 import { catalogRouter } from './routes/catalog.js';
@@ -90,6 +90,14 @@ app.use((error, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`\n  My Beauty Outfit Hair API listening on http://localhost:${PORT}`);
   console.log(`  Database: ${dbTarget}`);
+
+  if (!usingCloudinary) {
+    console.warn('\n  ⚠  CLOUDINARY_URL is not set — uploaded photos are being saved to local disk.');
+    console.warn('     On Render.com that disk is EPHEMERAL, so every image WILL disappear on the');
+    console.warn('     next deploy, restart or spin-down. Set CLOUDINARY_URL in the environment');
+    console.warn('     (Render -> Settings -> Environment) to store images in the cloud.\n');
+  }
+
   if (!process.env.ADMIN_PASSCODE) {
     console.warn('  ⚠  ADMIN_PASSCODE is not set - using the default from middleware/adminAuth.js.');
     console.warn('     Copy server/.env.example to server/.env and choose your own passcode.\n');

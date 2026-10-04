@@ -30,13 +30,17 @@ fs.mkdirSync(uploadsDir, { recursive: true });
  * the SDK auto-configures itself from the environment variable.
  */
 const useCloudinary = Boolean(process.env.CLOUDINARY_URL);
+export const usingCloudinary = useCloudinary;
 
 if (useCloudinary) {
   // cloudinary auto-configures from CLOUDINARY_URL env var
   console.log('[upload] Cloudinary enabled — images will persist in the cloud.');
 } else {
-  console.log('[upload] Cloudinary not configured — using local disk storage.');
-  console.log('         Set CLOUDINARY_URL in .env to enable cloud storage.');
+  console.warn(
+    '[upload] ⚠  CLOUDINARY_URL is not set — uploads go to local disk (server/uploads/).\n' +
+      '         On an ephemeral host such as Render.com these files are DELETED on every\n' +
+      '         deploy, restart or spin-down. Set CLOUDINARY_URL to store them in the cloud.'
+  );
 }
 
 /* --------------------------------------------------------- accepted types */
