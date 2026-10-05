@@ -34,9 +34,9 @@ try {
   if (error.code === 'ENETUNREACH' || error.code === 'ENOTFOUND') {
     console.error(
       '    The database host resolved to an IPv6 address, but Render has no IPv6\n' +
-        '    network route. In Supabase use the "Connection pooling" (Session mode)\n' +
-        '    string for DATABASE_URL - the host must be\n' +
-        '    aws-0-<region>.pooler.supabase.com, NOT db.<ref>.supabase.co.\n'
+      '    network route. In Supabase use the "Connection pooling" (Session mode)\n' +
+      '    string for DATABASE_URL - the host must be\n' +
+      '    aws-0-<region>.pooler.supabase.com, NOT db.<ref>.supabase.co.\n'
     );
   } else {
     console.error('    Check DATABASE_URL and that the database accepts connections.\n');
@@ -45,6 +45,7 @@ try {
 }
 
 const app = express();
+app.set('trust proxy', 1); // Add this!
 app.disable('x-powered-by');
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: '1mb' }));
